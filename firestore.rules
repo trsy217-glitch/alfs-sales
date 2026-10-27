@@ -1,0 +1,63 @@
+rules_version = '2';
+// 알프스 영업관리 — Firestore 보안 규칙
+// Firebase 콘솔 → Firestore Database → 규칙 탭에 이 내용을 통째로 붙여 넣고 '게시'하세요.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 대표 Google 계정 (src/config.js 의 ADMIN_EMAILS 와 같게). 여러 명이면 쉼표로 추가.
+    function isOwnerEmail() {
+      return request.auth != null && request.auth.token.email_verified == true
+        && request.auth.token.email in ['aamarketing250611@gmail.com'];
+    }
+    function signedIn() { return request.auth != null; }
+    function myRole() {
+      return exists(/databases/$(database)/documents/members/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/members/$(request.auth.uid)).data.role : 'none';
+    }
+    function isAdmin() { return isOwnerEmail() || (signedIn() && myRole() == 'admin'); }
+    function isMember() { return isOwnerEmail() || (signedIn() && myRole() in ['admin', 'tm', 'sales']); }
+    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function myEmail() { return signedIn() ? request.auth.token.email.lower() : ''; }
+    function invited() { return exists(/databases/$(database)/documents/invites/$(myEmail())); }
+
+    // 팀원: 팀원 누구나 사람을 등록하고 역할을 정함
+    // - 미리 등록(invites)된 사람은 로그인하면 그 역할로 바로 들어옴
+    // - 등록 안 된 사람은 '승인 대기'로 들어와 팀원이 역할을 정해 줌
+    match /members/{uid} {
+      allow read: if isMember() || isSelf(uid);
+      allow create: if isSelf(uid) && (
+        request.resource.data.role == 'pending'
+        || (request.resource.data.role == 'admin' && isOwnerEmail())
+        || (invited() && get(/databases/$(database)/documents/invites/$(myEmail())).data.role == request.resource.data.role)
+      );
+      allow update: if isMember() || (isSelf(uid) && request.resource.data.role == resource.data.role);
+      allow delete: if isMember();
+    }
+
+    // 미리 등록한 사람 (문서 이름 = 소문자 이메일)
+    match /invites/{email} {
+      allow read: if isMember() || (signedIn() && myEmail() == email);
+      allow create, update: if isMember() && request.resource.data.role in ['admin', 'tm', 'sales'];
+      allow delete: if isMember() || (signedIn() && myEmail() == email);
+    }
+
+    // 고객: 승인된 팀원 모두가 보고 기록. 삭제는 대표만
+    match /leads/{id} {
+      allow read, create, update: if isMember();
+      allow delete: if isAdmin();
+
+      // 기록·대화: 본인 이름으로만 남기고, 남긴 기록은 고치지 않음
+      match /logs/{logId} {
+        allow read: if isMember();
+        allow create: if isMember() && request.resource.data.by == request.auth.uid;
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
