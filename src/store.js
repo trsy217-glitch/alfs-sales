@@ -2,15 +2,15 @@
 // Firebase 모드: Firestore
 //   members/{uid}             팀원 { name, email, role: admin|tm|sales|pending, joinedAt }
 //   invites/{이메일}            팀원이 미리 등록한 사람 { name, role, by } → 그 사람이 로그인하면 이 역할로 바로 들어옴
-//   leads/{id}                고객(매장) 카드 — 단계·담당·다음 통화·미팅 예약·미팅 횟수·계약 상황
+//   leads/{id}                고객(매장) 카드 — 단계, 역할별 담당(tmId·salesId·managerId), 다음 통화·미팅 예약·다음 관리, 횟수, 계약, 완료 체크(checks)
 //   leads/{id}/logs/{logId}   통화·예약·미팅·계약·메모 기록 (팀원끼리 소통하는 대화창 역할)
-// 체험 모드(Firebase 값이 없을 때): 이 브라우저 localStorage 에만 저장, 예시 고객 3곳이 들어 있음
+// 체험 모드(Firebase 값이 없을 때): 이 브라우저 localStorage 에만 저장, 빈 상태로 시작
 import {
-  collection, doc, getDoc, getFirestore, onSnapshot, orderBy, query, limit, setDoc, updateDoc, deleteDoc, writeBatch, increment,
+  collection, doc, getDoc, getFirestore, onSnapshot, orderBy, query, limit, setDoc, updateDoc, deleteDoc, writeBatch, increment, deleteField,
 } from 'firebase/firestore'
 import { app, isDemoMode } from './firebase.js'
 import { ls } from './safeStorage.js'
-import { nowLocal, todayStr } from './data.js'
+import { nowLocal } from './data.js'
 
 const db = app ? getFirestore(app) : null
 const iso = () => new Date().toISOString()
@@ -18,28 +18,9 @@ const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2
 export const demo = isDemoMode
 
 // ── 체험 모드 저장소 ──
-const KEY = 'alfs_sales_demo_v1'
+const KEY = 'alfs_sales_demo_v2' // v2: 예시 데이터 없이 빈 상태로 시작
 const listeners = new Set()
-function seed() {
-  const t = todayStr()
-  const at = (days, hm) => { const d = new Date(`${t}T00:00`); d.setDate(d.getDate() + days); const p2 = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${hm}` }
-  const lead = (id, o) => ({ id, sample: true, createdAt: iso(), updatedAt: iso(), tmId: 'demo-tm', salesId: null, meetings: 0, calls: 0, nextCall: null, appt: null, apptAck: false, contract: null, ...o })
-  const leads = {
-    s1: lead('s1', { name: '(예시) 망원 바른헬스', person: '김원장', phone: '010-1234-5678', region: '서울 마포구 망원동', category: '헬스·PT', stage: 'booked', salesId: 'demo-sales', appt: { at: at(1, '14:00'), place: '매장 방문' }, calls: 2, lastText: '원장님이 회원용 음료 메뉴에 관심. 내일 2시 방문 미팅 잡음', lastBy: 'demo-tm' }),
-    s2: lead('s2', { name: '(예시) 수피부 에스테틱', person: '박실장', phone: '02-333-4444', region: '서울 송파구 잠실동', category: '뷰티·피부샵', stage: 'called', nextCall: at(0, '16:30'), calls: 1, lastText: '원장님 부재. 오후 4시 반에 다시 연락 달라고 함', lastBy: 'demo-tm' }),
-    s3: lead('s3', { name: '(예시) 보은 들꽃카페', person: '이대표', phone: '010-9876-5432', region: '충북 보은군', category: '카페', stage: 'nego', salesId: 'demo-sales', meetings: 2, calls: 3, contract: { status: 'nego', amount: 0, date: '' }, lastText: '2차 미팅. 샵인샵 진열대 위치 협의 중', lastBy: 'demo-sales' }),
-  }
-  const logs = {
-    s1: [{ id: 'l1', type: 'create', by: 'demo-tm', at: iso(), text: '네이버 지도에서 찾은 매장' }, { id: 'l2', type: 'call', by: 'demo-tm', at: iso(), result: 'talked', text: '원장님이 회원용 음료 메뉴에 관심' }, { id: 'l3', type: 'book', by: 'demo-tm', at: iso(), apptAt: at(1, '14:00'), place: '매장 방문', salesId: 'demo-sales', text: '내일 2시 방문 미팅 잡음' }],
-    s2: [{ id: 'l4', type: 'call', by: 'demo-tm', at: iso(), result: 'callback', text: '원장님 부재. 오후 4시 반에 다시 연락 달라고 함' }],
-    s3: [{ id: 'l5', type: 'meet', by: 'demo-sales', at: iso(), count: 2, text: '2차 미팅. 샵인샵 진열대 위치 협의 중' }],
-  }
-  const members = {
-    'demo-tm': { name: '(예시) 최TM', role: 'tm', email: '' },
-    'demo-sales': { name: '(예시) 동생 영업', role: 'sales', email: '' },
-  }
-  return { leads, logs, members, invites: {} }
-}
+const seed = () => ({ leads: {}, logs: {}, members: {}, invites: {} })
 const load = () => { const s = ls.get(KEY) || seed(); s.invites ||= {}; return s }
 const save = (s) => { ls.set(KEY, s); listeners.forEach((f) => f()) }
 const sub = (f) => { listeners.add(f); f(); return () => listeners.delete(f) }
@@ -119,7 +100,8 @@ export function watchLogs(leadId, cb) {
 export async function createLead(user, data) {
   const id = newId()
   const lead = {
-    ...data, stage: 'new', tmId: user.id, salesId: data.salesId || null, meetings: 0, calls: 0, nextCall: null, appt: null, apptAck: false, contract: null,
+    ...data, stage: 'new', tmId: data.tmId || user.id, salesId: data.salesId || null, managerId: data.managerId || null, createdBy: user.id,
+    meetings: 0, calls: 0, manages: 0, nextCall: null, nextManage: null, appt: null, apptAck: false, contract: null, checks: {},
     createdAt: iso(), updatedAt: iso(), lastText: data.memo || '고객 등록', lastBy: user.id,
   }
   const log = { type: 'create', by: user.id, at: iso(), text: data.memo || '' }
@@ -138,7 +120,7 @@ export async function act(user, lead, log, patch = {}, counters = {}) {
   if (!summary.lastText) delete summary.lastText
   if (demo) {
     const s = load(); const l = s.leads[lead.id]; if (!l) return
-    Object.assign(l, patch, summary)
+    applyDemo(l, { ...patch, ...summary })
     for (const [k, v] of Object.entries(counters)) l[k] = (l[k] || 0) + v
     ;(s.logs[lead.id] ||= []).push({ id: newId(), ...entry }); save(s); return
   }
@@ -151,7 +133,7 @@ export async function act(user, lead, log, patch = {}, counters = {}) {
 }
 
 export async function editLead(lead, patch) {
-  if (demo) { const s = load(); Object.assign(s.leads[lead.id], patch, { updatedAt: iso() }); save(s); return }
+  if (demo) { const s = load(); applyDemo(s.leads[lead.id], { ...patch, updatedAt: iso() }); save(s); return }
   await updateDoc(doc(db, 'leads', lead.id), { ...patch, updatedAt: iso() })
 }
 export async function deleteLead(lead) {
@@ -159,3 +141,21 @@ export async function deleteLead(lead) {
   await deleteDoc(doc(db, 'leads', lead.id)) // 기록(logs)은 남지만 목록에서는 사라집니다
 }
 export const _now = nowLocal
+
+// 체험 모드: 'checks.키' 처럼 점으로 된 경로와 DELETE 표시를 처리
+const DELETE = '__delete__'
+function applyDemo(obj, patch) {
+  for (const [k, v] of Object.entries(patch)) {
+    const parts = k.split('.'); let o = obj
+    for (const p of parts.slice(0, -1)) o = (o[p] ||= {})
+    const last = parts[parts.length - 1]
+    if (v === DELETE) delete o[last]; else o[last] = v
+  }
+}
+
+/** 대시보드 체크: 켜면 기록도 남김, 끄면 체크만 지움 */
+export async function setCheck(user, lead, key, on, info) {
+  const path = `checks.${key}`
+  if (on) return act(user, lead, { type: 'check', ...info }, { [path]: { by: user.id, at: iso() } })
+  return editLead(lead, { [path]: demo ? DELETE : deleteField() })
+}

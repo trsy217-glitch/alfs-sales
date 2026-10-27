@@ -15,7 +15,7 @@ service cloud.firestore {
         ? get(/databases/$(database)/documents/members/$(request.auth.uid)).data.role : 'none';
     }
     function isAdmin() { return isOwnerEmail() || (signedIn() && myRole() == 'admin'); }
-    function isMember() { return isOwnerEmail() || (signedIn() && myRole() in ['admin', 'tm', 'sales']); }
+    function isMember() { return isOwnerEmail() || (signedIn() && myRole() in ['admin', 'tm', 'sales', 'manager']); }
     function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
 
     function myEmail() { return signedIn() ? request.auth.token.email.lower() : ''; }
@@ -38,7 +38,7 @@ service cloud.firestore {
     // 미리 등록한 사람 (문서 이름 = 소문자 이메일)
     match /invites/{email} {
       allow read: if isMember() || (signedIn() && myEmail() == email);
-      allow create, update: if isMember() && request.resource.data.role in ['admin', 'tm', 'sales'];
+      allow create, update: if isMember() && request.resource.data.role in ['admin', 'tm', 'sales', 'manager'];
       allow delete: if isMember() || (signedIn() && myEmail() == email);
     }
 

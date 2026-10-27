@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AuthProvider, useAuth, inAppBrowser, openInExternalBrowser } from './auth.jsx'
 import {
   demo, watchMyMember, watchMembers, requestJoin, setMember, removeMember, watchLeads, watchLogs, createLead, act, editLead, deleteLead,
-  watchInvites, addInvite, removeInvite, claimInvite,
+  watchInvites, addInvite, removeInvite, claimInvite, setCheck,
 } from './store.js'
 import {
-  ROLES, STAGES, STAGE, OPEN_STAGES, CATEGORIES, CALL_RESULTS, CALL_RESULT, MEETING_NEXT, CONTRACT_STATUS, CONTRACT, LOG_LABEL,
-  nowLocal, todayStr, fmtWhen, fmtAgo, won, telHref, fmtPhone,
+  ROLES, ROLE_PICK, DUTIES, OWNER_OF_STAGE, STAGES, STAGE, OPEN_STAGES, CATEGORIES, CALL_RESULTS, CALL_RESULT, MEETING_NEXT, CONTRACT_STATUS, CONTRACT, LOG_LABEL,
+  nowLocal, todayStr, fmtWhen, fmtAgo, won, telHref, fmtPhone, weekDays, dayLabel, checkKey,
 } from './data.js'
 import { ADMIN_EMAILS } from './config.js'
 import './styles.css'
@@ -35,7 +35,7 @@ function Gate({ auth }) {
     <div className="app"><div className="wrap gate">
       <div className="brand">ALFS<small>영업관리</small></div>
       <h1>전화부터 계약까지,<br />한 화면에서 함께 봅니다</h1>
-      <p className="muted">알프스 TM·영업 담당자 전용입니다. 회사에서 안내받은 Google 계정으로 로그인해 주세요.</p>
+      <p className="muted">알프스 TM·미팅·관리 담당자 전용입니다. 회사에서 안내받은 Google 계정으로 로그인해 주세요.</p>
       {inApp ? (
         <div className="stack">
           <p>{inApp === 'kakao' ? '카카오톡' : '앱'} 안의 브라우저에서는 Google 로그인이 막혀 있어요. 크롬·사파리에서 열어 주세요.</p>
@@ -69,7 +69,7 @@ function Join({ user, onOut }) {
       <div className="brand">ALFS<small>영업관리</small></div>
       <h1>처음 오셨네요</h1>
       <p className="muted">{isAdmin ? '대표 계정입니다. 이름을 적으면 바로 시작합니다.' : '아직 팀원으로 등록되지 않은 계정이에요. 이름을 적고 가입을 요청하면, 팀원 누구나 팀원 탭에서 역할을 정해 줄 수 있어요. 미리 등록을 부탁했다면 그때 알려 준 Google 계정으로 로그인했는지 확인해 주세요.'}</p>
-      <label className="field"><span>이름</span><input id="joinName" className="inp" value={name} maxLength={20} onChange={(e) => setName(e.target.value)} placeholder="예: 김영업" /></label>
+      <label className="field"><span>이름</span><input id="joinName" className="inp" value={name} maxLength={20} onChange={(e) => setName(e.target.value)} /></label>
       {err && <p className="err">{err}</p>}
       <button className="btn-primary" disabled={busy}>{isAdmin ? '시작하기' : '가입 요청'}</button>
       <p className="muted small">{user.email} · <button type="button" className="link" onClick={onOut}>다른 계정으로</button></p>
@@ -82,7 +82,7 @@ function Waiting({ me, onOut }) {
     <Shell><div className="gate">
       <div className="brand">ALFS<small>영업관리</small></div>
       <h1>{me.name}님, 승인을 기다리고 있어요</h1>
-      <p className="muted">팀원 누구나 '팀원' 탭에서 역할(TM·영업사원)을 정해 주면 바로 열립니다. 정해지면 이 화면이 저절로 바뀌어요.</p>
+      <p className="muted">팀원 누구나 '팀원' 탭에서 역할(TM·미팅·관리)을 정해 주면 바로 열립니다. 정해지면 이 화면이 저절로 바뀌어요.</p>
       <button type="button" className="link" onClick={onOut}>로그아웃</button>
     </div></Shell>
   )
@@ -110,14 +110,15 @@ function Main({ user, me, onOut }) {
       user, me, members, say,
       nameOf: (id) => (id ? map[id]?.name || '팀원' : ''),
       roleOf: (id) => map[id]?.role,
-      salesList: members.filter((m) => m.role === 'sales' || m.role === 'admin'),
+      people: members.filter((m) => m.role !== 'pending'),
       isAdmin: me.role === 'admin',
     }
   }, [members, me, user]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = leads?.find((l) => l.id === openId)
   const pendingCount = members.filter((m) => m.role === 'pending').length
-  const ackCount = (leads || []).filter((l) => l.appt && !l.apptAck && l.salesId === user.id && OPEN_STAGES.includes(l.stage)).length
+  const todayCount = useMemo(() => buildTasks(leads || []).filter((t) => t.day <= todayStr() && !t.done && t.ownerId === user.id).length
+    + (leads || []).filter((l) => l.appt && !l.apptAck && l.salesId === user.id && OPEN_STAGES.includes(l.stage)).length, [leads, user.id])
 
   return (
     <div className="app">
@@ -126,10 +127,10 @@ function Main({ user, me, onOut }) {
         <div className="me"><span className={`role role-${me.role}`}>{ROLES[me.role]?.short}</span>{me.name}</div>
       </header>
       <div className="wrap main">
-        {demo && <p className="demo">체험 모드입니다. 이 브라우저에만 저장되고, (예시) 고객 3곳이 들어 있어요. Firebase를 연결하면 팀원이 함께 씁니다.</p>}
+        {demo && <p className="demo">체험 모드입니다. 이 브라우저에만 저장돼요. Firebase를 연결하면 팀원이 함께 씁니다.</p>}
         {err && <p className="err">{err}</p>}
         {leads === null ? <p className="muted center pad">불러오는 중…</p>
-          : tab === 'today' ? <Today leads={leads} ctx={ctx} onOpen={setOpenId} />
+          : tab === 'today' ? <Dashboard leads={leads} ctx={ctx} onOpen={setOpenId} />
             : tab === 'list' ? <LeadList leads={leads} ctx={ctx} onOpen={setOpenId} />
               : tab === 'stats' ? <Stats leads={leads} ctx={ctx} />
                 : <Team ctx={ctx} />}
@@ -139,7 +140,7 @@ function Main({ user, me, onOut }) {
       {tab !== 'team' && <button type="button" className="fab" onClick={() => setAdding(true)} aria-label="고객 등록">＋ 고객 등록</button>}
 
       <nav className="tabbar" aria-label="화면">
-        {[['today', '할 일', ackCount], ['list', '고객', 0], ['stats', '현황', 0], ['team', '팀원', pendingCount]].map(([k, n, badge]) => (
+        {[['today', '대시보드', todayCount], ['list', '고객', 0], ['stats', '현황', 0], ['team', '팀원', pendingCount]].map(([k, n, badge]) => (
           <button type="button" key={k} aria-current={tab === k ? 'page' : undefined} onClick={() => setTab(k)}>
             {n}{badge > 0 && <i className="badge">{badge}</i>}
           </button>
@@ -153,29 +154,94 @@ function Main({ user, me, onOut }) {
   )
 }
 
-/* ── 할 일 ── */
-function Today({ leads, ctx, onOpen }) {
+/* ── 대시보드: 오늘·이번 주 연락·방문·관리 + 체크 ── */
+const TASK_TYPES = [
+  { k: 'call', n: '연락', duty: 'tmId', tone: 'blue' },
+  { k: 'meet', n: '방문', duty: 'salesId', tone: 'violet' },
+  { k: 'manage', n: '관리', duty: 'managerId', tone: 'green' },
+]
+const TASK = Object.fromEntries(TASK_TYPES.map((t) => [t.k, t]))
+
+// 고객 카드에서 일정(다음 통화·미팅 예약·다음 관리)을 꺼내 할 일 목록으로
+function buildTasks(leads) {
+  const out = []
+  for (const l of leads) {
+    const add = (type, at, extra = {}) => {
+      if (!at) return
+      const key = checkKey(type, at)
+      const done = l.checks?.[key]
+      out.push({ id: `${l.id}:${key}`, key, type, at, day: at.slice(0, 10), lead: l, ownerId: l[TASK[type].duty] || null, done, ...extra })
+    }
+    if (OPEN_STAGES.includes(l.stage) && l.nextCall) add('call', l.nextCall)
+    if (OPEN_STAGES.includes(l.stage) && l.appt?.at) add('meet', l.appt.at, { place: l.appt.place })
+    if (l.nextManage) add('manage', l.nextManage)
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at))
+}
+
+function Dashboard({ leads, ctx, onOpen }) {
   const { user, me } = ctx
+  const [scope, setScope] = useState(me.role === 'admin' ? 'all' : 'mine')
+  const [type, setType] = useState('all')
   const today = todayStr()
+  const week = weekDays()
+  const all = useMemo(() => buildTasks(leads), [leads])
+  const inScope = (t) => (scope === 'all' || t.ownerId === user.id) && (type === 'all' || t.type === type)
+  const todayList = all.filter((t) => inScope(t) && (t.day === today || (t.day < today && !t.done)))
+  const weekRest = all.filter((t) => inScope(t) && t.day > today && t.day <= week[6])
+  const weekPast = all.filter((t) => inScope(t) && t.day >= week[0] && t.day < today && t.done)
+  const count = (k, list) => list.filter((t) => t.type === k && !t.done).length
+  const scoped = all.filter((t) => scope === 'all' || t.ownerId === user.id)
+  const todayAll = scoped.filter((t) => t.day === today || (t.day < today && !t.done))
+  const weekAll = scoped.filter((t) => t.day >= today && t.day <= week[6])
   const open = leads.filter((l) => OPEN_STAGES.includes(l.stage))
-  const mineSales = (l) => me.role !== 'sales' || l.salesId === user.id
   const toAck = open.filter((l) => l.appt && !l.apptAck && l.salesId === user.id)
-  const meetings = open.filter((l) => l.appt?.at && l.appt.at.slice(0, 10) >= today && mineSales(l)).sort((a, b) => a.appt.at.localeCompare(b.appt.at))
-  const late = open.filter((l) => l.stage === 'booked' && l.appt?.at && l.appt.at.slice(0, 10) < today && mineSales(l))
-  const calls = me.role === 'sales' ? [] : open.filter((l) => l.nextCall && l.nextCall.slice(0, 10) <= today).sort((a, b) => a.nextCall.localeCompare(b.nextCall))
-  const fresh = me.role === 'sales' ? [] : open.filter((l) => l.stage === 'new')
-  const news = [...leads].filter((l) => l.lastBy && l.lastBy !== user.id && mineSales(l)).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6)
-  const empty = !toAck.length && !meetings.length && !late.length && !calls.length && !fresh.length
+  const late = open.filter((l) => l.stage === 'booked' && l.appt?.at && l.appt.at.slice(0, 10) < today && (scope === 'all' || l.salesId === user.id))
+  const fresh = open.filter((l) => l.stage === 'new' && (scope === 'all' || l.tmId === user.id))
+  const news = [...leads].filter((l) => l.lastBy && l.lastBy !== user.id).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6)
 
   return (
     <div className="stack">
-      <h2 className="h">{me.name}님, 오늘 할 일</h2>
-      {toAck.length > 0 && <Group title="확인할 미팅 예약" tone="alert" note="TM이 잡은 미팅입니다. 열어서 '확인'을 눌러 주세요.">{toAck.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show="appt" />)}</Group>}
+      <h2 className="h">{me.name}님 대시보드</h2>
+      <div className="seg seg-2">
+        <button type="button" aria-pressed={scope === 'mine'} onClick={() => setScope('mine')}>내 담당</button>
+        <button type="button" aria-pressed={scope === 'all'} onClick={() => setScope('all')}>팀 전체</button>
+      </div>
+
+      <div className="tiles">
+        {TASK_TYPES.map((tt) => (
+          <button type="button" key={tt.k} className={`tile tile-${tt.tone}`} aria-pressed={type === tt.k} onClick={() => setType(type === tt.k ? 'all' : tt.k)}>
+            <span>오늘 {tt.n}</span><b>{count(tt.k, todayAll)}</b><small>이번 주 {count(tt.k, weekAll)}</small>
+          </button>
+        ))}
+      </div>
+      {type !== 'all' && <button type="button" className="link small" onClick={() => setType('all')}>{TASK[type].n}만 보는 중 · 전체 보기</button>}
+
+      {toAck.length > 0 && <Group title="확인할 미팅 예약" tone="alert" note="TM이 잡은 미팅이에요. 열어서 '확인'을 눌러 주세요.">{toAck.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show="appt" />)}</Group>}
+
+      <section className="group">
+        <h3>오늘 · {dayLabel(today)}<span className="count">{todayList.filter((t) => !t.done).length}</span></h3>
+        {todayList.length ? <div className="tasks">{todayList.map((t) => <TaskRow key={t.id} t={t} ctx={ctx} onOpen={onOpen} />)}</div>
+          : <div className="empty">오늘 연락·방문·관리 일정이 없어요.</div>}
+      </section>
+
+      <section className="group">
+        <h3>이번 주 · {dayLabel(week[0])} ~ {dayLabel(week[6])}<span className="count">{weekRest.filter((t) => !t.done).length}</span></h3>
+        {weekRest.length === 0 && weekPast.length === 0 && <div className="empty">이번 주 남은 일정이 없어요.</div>}
+        {week.filter((d) => d !== today).map((d) => {
+          const items = (d > today ? weekRest : weekPast).filter((t) => t.day === d)
+          if (!items.length) return null
+          return (
+            <div className="day" key={d}>
+              <div className="day-h">{dayLabel(d)}{d < today && <span className="muted"> · 지난 날</span>}</div>
+              <div className="tasks">{items.map((t) => <TaskRow key={t.id} t={t} ctx={ctx} onOpen={onOpen} />)}</div>
+            </div>
+          )
+        })}
+      </section>
+
       {late.length > 0 && <Group title="결과를 안 적은 미팅" tone="warn">{late.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show="appt" />)}</Group>}
-      {calls.length > 0 && <Group title="오늘 다시 걸 전화">{calls.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show="call" />)}</Group>}
-      {meetings.length > 0 && <Group title="다가오는 미팅">{meetings.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show="appt" />)}</Group>}
       {fresh.length > 0 && <Group title="아직 통화 전인 신규 고객">{fresh.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} />)}</Group>}
-      {empty && <div className="empty"><b>지금 급한 일은 없어요</b>{me.role === 'sales' ? 'TM이 미팅을 잡으면 여기에 먼저 나타나요.' : '아래 ＋ 고객 등록으로 전화할 매장을 추가해 보세요.'}</div>}
       {news.length > 0 && (
         <Group title="팀원 최근 소식">
           {news.map((l) => (
@@ -186,6 +252,31 @@ function Today({ leads, ctx, onOpen }) {
           ))}
         </Group>
       )}
+    </div>
+  )
+}
+
+function TaskRow({ t, ctx, onOpen }) {
+  const [busy, setBusy] = useState(false)
+  const tt = TASK[t.type]
+  const l = t.lead
+  const late = !t.done && t.day < todayStr()
+  const toggle = async () => {
+    setBusy(true)
+    try {
+      await setCheck(ctx.user, l, t.key, !t.done, { task: t.type, taskAt: t.at, text: `${tt.n} 완료 (${fmtWhen(t.at)})` })
+      ctx.say(t.done ? '체크를 풀었어요' : `${tt.n} 완료로 체크했어요`)
+    } catch { ctx.say('체크하지 못했어요') } finally { setBusy(false) }
+  }
+  return (
+    <div className={`task ${t.done ? 'done' : ''}`}>
+      <button type="button" className="tick" role="checkbox" aria-checked={!!t.done} aria-label={`${l.name} ${tt.n} 완료`} disabled={busy} onClick={toggle}>{t.done ? '✓' : ''}</button>
+      <button type="button" className="task-main" onClick={() => onOpen(l.id)}>
+        <span className="task-h"><span className={`pill tone-${tt.tone}`}>{tt.n}</span><b className="task-time">{t.at.slice(11, 16)}</b>{late && <em className="late">밀림 · {dayLabel(t.day)}</em>}</span>
+        <span className="task-name">{l.name}</span>
+        <span className="task-s">{[t.place, l.person, t.ownerId ? `담당 ${ctx.nameOf(t.ownerId)}` : '담당 미정'].filter(Boolean).join(' · ')}{t.done && ` · ${ctx.nameOf(t.done.by)} 완료`}</span>
+      </button>
+      {l.phone && <a className="task-call" href={telHref(l.phone)} aria-label={`${l.name}에 전화`}>☎</a>}
     </div>
   )
 }
@@ -200,20 +291,28 @@ const Group = ({ title, note, tone, children }) => (
 function StagePill({ k }) { const s = STAGE[k] || STAGE.new; return <span className={`pill tone-${s.tone}`}>{s.n}</span> }
 
 function Card({ l, ctx, onOpen, show }) {
-  const when = show === 'call' ? (l.nextCall && `☎ ${fmtWhen(l.nextCall)} 다시 전화`)
-    : (l.appt?.at && `미팅 ${fmtWhen(l.appt.at)}${l.appt.place ? ` · ${l.appt.place}` : ''}`)
+  const when = show === 'call' ? (l.nextCall && `☎ ${fmtWhen(l.nextCall)} 연락`)
+    : show === 'manage' ? (l.nextManage && `관리 ${fmtWhen(l.nextManage)}`)
+      : (l.appt?.at && `방문 미팅 ${fmtWhen(l.appt.at)}${l.appt.place ? ` · ${l.appt.place}` : ''}`)
   return (
     <button type="button" className="card" onClick={() => onOpen(l.id)}>
       <span className="card-h"><b>{l.name}</b><StagePill k={l.stage} /></span>
       <span className="card-s">{[l.category, l.region, l.person].filter(Boolean).join(' · ')}</span>
       {when && <span className="card-when">{when}{show === 'appt' && l.appt && !l.apptAck && <em className="unack">미확인</em>}</span>}
       <span className="card-f">
-        {l.salesId ? <>영업 {ctx.nameOf(l.salesId)}</> : <span className="muted">영업 미배정</span>}
+        <OwnerNow l={l} ctx={ctx} />
         {' · '}미팅 {l.meetings || 0}회{l.contract?.status && ` · 계약 ${CONTRACT[l.contract.status]?.n}`}
       </span>
       {l.lastText && <span className="card-last">{l.lastText}</span>}
     </button>
   )
+}
+
+function OwnerNow({ l, ctx }) {
+  const k = OWNER_OF_STAGE[l.stage]
+  if (!k) return <span className="muted">진행 멈춤</span>
+  const d = DUTIES.find((x) => x.k === k)
+  return l[k] ? <>지금 담당 <b>{d.n} {ctx.nameOf(l[k])}</b></> : <span className="muted">{d.n} 담당 미정</span>
 }
 
 /* ── 고객 목록 ── */
@@ -225,7 +324,7 @@ function LeadList({ leads, ctx, onOpen }) {
   const counts = useMemo(() => { const c = { all: leads.length, open: 0 }; leads.forEach((l) => { c[l.stage] = (c[l.stage] || 0) + 1; if (OPEN_STAGES.includes(l.stage)) c.open++ }); return c }, [leads])
   const shown = leads.filter((l) => {
     if (stage === 'open' ? !OPEN_STAGES.includes(l.stage) : stage !== 'all' && l.stage !== stage) return false
-    if (mine && l.salesId !== uid && l.tmId !== uid) return false
+    if (mine && l.salesId !== uid && l.tmId !== uid && l.managerId !== uid) return false
     if (q) { const s = `${l.name} ${l.person} ${l.phone} ${l.region}`.toLowerCase(); if (!s.includes(q.toLowerCase().trim())) return false }
     return true
   }).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
@@ -237,9 +336,9 @@ function LeadList({ leads, ctx, onOpen }) {
           <button type="button" key={k} aria-pressed={stage === k} onClick={() => setStage(k)}>{n}<small>{counts[k] || 0}</small></button>
         ))}
       </div>
-      <label className="check"><input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> 내가 맡은 고객만</label>
+      <label className="check"><input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> 내가 담당(TM·미팅·관리)인 고객만</label>
       <div className="list">
-        {shown.length ? shown.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show={l.nextCall && !l.appt ? 'call' : 'appt'} />)
+        {shown.length ? shown.map((l) => <Card key={l.id} l={l} ctx={ctx} onOpen={onOpen} show={l.nextCall && !l.appt ? 'call' : l.nextManage && !l.appt ? 'manage' : 'appt'} />)
           : <div className="empty"><b>조건에 맞는 고객이 없어요</b>검색어나 단계를 바꿔 보세요.</div>}
       </div>
     </div>
@@ -276,30 +375,30 @@ function Stats({ leads, ctx }) {
         <h3>팀원별</h3>
         <div className="table-wrap">
           <table className="tbl">
-            <thead><tr><th>이름</th><th>등록</th><th>통화</th><th>담당</th><th>미팅</th><th>계약</th></tr></thead>
+            <thead><tr><th>이름</th><th>TM 고객</th><th>통화</th><th>미팅 고객</th><th>미팅</th><th>계약</th><th>관리 고객</th></tr></thead>
             <tbody>
               {people.map((m) => {
                 const reg = leads.filter((l) => l.tmId === m.id)
                 const own = leads.filter((l) => l.salesId === m.id)
+                const care = leads.filter((l) => l.managerId === m.id)
                 return (
                   <tr key={m.id}>
                     <td><b>{m.name}</b> <span className={`role role-${m.role}`}>{ROLES[m.role]?.short}</span></td>
                     <td>{reg.length}</td><td>{reg.reduce((n, l) => n + (l.calls || 0), 0)}</td>
-                    <td>{own.length}</td><td>{own.reduce((n, l) => n + (l.meetings || 0), 0)}</td><td>{own.filter((l) => l.stage === 'won').length}</td>
+                    <td>{own.length}</td><td>{own.reduce((n, l) => n + (l.meetings || 0), 0)}</td><td>{own.filter((l) => l.stage === 'won').length}</td><td>{care.length}</td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
         </div>
-        <p className="muted small">등록·통화는 그 사람이 등록한 고객 기준, 담당·미팅·계약은 영업 담당 기준입니다.</p>
+        <p className="muted small">고객마다 정한 역할별 담당 기준입니다. TM 고객·통화는 TM 담당, 미팅·계약은 대면 미팅 담당, 관리 고객은 관리 담당.</p>
       </section>
     </div>
   )
 }
 
 /* ── 팀원 (모두가 등록·역할 지정) ── */
-const ROLE_PICK = ['tm', 'sales', 'admin']
 function Team({ ctx }) {
   const [invites, setInvites] = useState([])
   const [f, setF] = useState({ name: '', email: '', role: 'tm' })
@@ -334,10 +433,10 @@ function Team({ ctx }) {
         <h3>팀원 등록</h3>
         <p className="muted small">이름과 Google 계정 이메일, 역할을 적어 두면 그 사람이 로그인할 때 승인 없이 바로 들어옵니다. 팀원 누구나 등록하고 역할을 바꿀 수 있어요.</p>
         <div className="row2">
-          <label className="field"><span>이름</span><input id="mName" className="inp" value={f.name} maxLength={20} onChange={(e) => setF((s) => ({ ...s, name: e.target.value }))} placeholder="예: 김TM" /></label>
-          <label className="field"><span>Google 이메일</span><input id="mEmail" className="inp" type="email" inputMode="email" autoCapitalize="off" value={f.email} onChange={(e) => setF((s) => ({ ...s, email: e.target.value }))} placeholder="name@gmail.com" /></label>
+          <label className="field"><span>이름</span><input id="mName" className="inp" value={f.name} maxLength={20} onChange={(e) => setF((s) => ({ ...s, name: e.target.value }))} /></label>
+          <label className="field"><span>Google 이메일</span><input id="mEmail" className="inp" type="email" inputMode="email" autoCapitalize="off" value={f.email} onChange={(e) => setF((s) => ({ ...s, email: e.target.value }))} /></label>
         </div>
-        <div className="field"><span>역할</span><Chips items={ROLE_PICK.map((r) => ({ k: r, n: ROLES[r].short === '대표' ? '대표·관리' : ROLES[r].n }))} value={f.role} onChange={(r) => setF((s) => ({ ...s, role: r }))} /></div>
+        <div className="field"><span>역할</span><Chips items={ROLE_PICK.map((r) => ({ k: r, n: ROLES[r].n }))} value={f.role} onChange={(r) => setF((s) => ({ ...s, role: r }))} /></div>
         {err && <p className="err">{err}</p>}
         <button className="btn-primary" disabled={busy}>{busy ? '등록하는 중…' : '등록'}</button>
       </form>
@@ -372,7 +471,7 @@ function Team({ ctx }) {
       <section className="group">
         <h3>함께 쓰는 팀원<span className="count">{active.length}</span></h3>
         <div className="list">{active.map((m) => <MemberRow key={m.id} m={m} ctx={ctx} onRole={change} onRemove={remove} sure={sure} />)}</div>
-        <p className="muted small">모든 팀원이 모든 고객과 기록·대화를 함께 봅니다. TM은 주로 등록·통화·미팅 예약, 영업사원은 예약 확인·미팅 결과·계약을 적어요.</p>
+        <p className="muted small">등록된 팀원은 모든 고객과 기록·대화를 함께 봅니다. 고객마다 TM·미팅 전, 대면 미팅, 관리 담당을 따로 정하고, 단계가 넘어가면 그 단계 담당이 이어받아요.</p>
       </section>
     </div>
   )
@@ -426,7 +525,14 @@ function Detail({ lead: l, ctx, onClose }) {
               <button type="button" className="link small" onClick={() => navigator.clipboard?.writeText(l.phone).then(() => ctx.say('번호를 복사했어요'), () => {})}>복사</button></span> : <b>—</b>}
           </div>
           <div className="info-row"><span>지역·업종</span><b>{[l.region, l.category].filter(Boolean).join(' · ') || '—'}</b></div>
-          <div className="info-row"><span>TM · 영업</span><b>{ctx.nameOf(l.tmId) || '—'} · {l.salesId ? ctx.nameOf(l.salesId) : <span className="muted">미배정</span>}</b></div>
+        </div>
+        <div className="duties">
+          {DUTIES.map((d) => (
+            <div key={d.k} className={OWNER_OF_STAGE[l.stage] === d.k ? 'now' : ''}>
+              <span>{d.n}{OWNER_OF_STAGE[l.stage] === d.k && <em>지금</em>}</span>
+              <b>{l[d.k] ? ctx.nameOf(l[d.k]) : <span className="muted">미정</span>}</b>
+            </div>
+          ))}
         </div>
 
         <div className="status">
@@ -434,11 +540,12 @@ function Detail({ lead: l, ctx, onClose }) {
             <span>미팅 예약</span>
             <b>{l.appt?.at ? fmtWhen(l.appt.at) : '없음'}</b>
             {l.appt?.place && <small>{l.appt.place}</small>}
-            {l.appt && <small>{l.apptAck ? '영업 확인 완료' : '영업 미확인'}</small>}
+            {l.appt && <small>{l.apptAck ? '미팅 담당 확인 완료' : '미팅 담당 미확인'}</small>}
           </div>
           <div><span>미팅 횟수</span><b>{l.meetings || 0}회</b><small>통화 {l.calls || 0}회</small></div>
           <div className={l.contract ? '' : 'off'}><span>계약</span><b>{l.contract ? CONTRACT[l.contract.status]?.n : '—'}</b>{l.contract?.amount ? <small>{won(l.contract.amount)}원</small> : null}</div>
-          <div className={l.nextCall ? '' : 'off'}><span>다음 통화</span><b>{l.nextCall ? fmtWhen(l.nextCall) : '—'}</b></div>
+          <div className={l.nextCall ? '' : 'off'}><span>다음 연락</span><b>{l.nextCall ? fmtWhen(l.nextCall) : '—'}</b></div>
+          <div className={l.nextManage ? '' : 'off'}><span>다음 관리</span><b>{l.nextManage ? fmtWhen(l.nextManage) : '—'}</b><small>관리 {l.manages || 0}회</small></div>
         </div>
 
         {needAck && (
@@ -450,9 +557,10 @@ function Detail({ lead: l, ctx, onClose }) {
 
         <div className="actions">
           <button type="button" onClick={() => setSheet('call')}><b>통화 기록</b><small>결과·다음 통화</small></button>
-          <button type="button" onClick={() => setSheet('book')}><b>미팅 예약</b><small>일시·영업 배정</small></button>
+          <button type="button" onClick={() => setSheet('book')}><b>미팅 예약</b><small>일시·미팅 담당</small></button>
           <button type="button" onClick={() => setSheet('meet')}><b>미팅 결과</b><small>횟수·다음 단계</small></button>
           <button type="button" onClick={() => setSheet('contract')}><b>계약 상황</b><small>협의·완료·금액</small></button>
+          <button type="button" className="wide" onClick={() => setSheet('manage')}><b>관리 기록</b><small>계약 후 방문·재발주·교육, 다음 관리 일정</small></button>
         </div>
 
         <h3 className="h3">기록과 대화</h3>
@@ -475,6 +583,7 @@ function Detail({ lead: l, ctx, onClose }) {
       {sheet === 'book' && <BookSheet l={l} ctx={ctx} onClose={() => setSheet(null)} />}
       {sheet === 'meet' && <MeetSheet l={l} ctx={ctx} onClose={() => setSheet(null)} />}
       {sheet === 'contract' && <ContractSheet l={l} ctx={ctx} onClose={() => setSheet(null)} />}
+      {sheet === 'manage' && <ManageSheet l={l} ctx={ctx} onClose={() => setSheet(null)} />}
       {sheet === 'edit' && <LeadForm ctx={ctx} lead={l} onClose={() => setSheet(null)} onSaved={() => { setSheet(null); ctx.say('고쳤어요') }} onDeleted={() => { setSheet(null); onClose(); ctx.say('삭제했어요') }} />}
     </div>
   )
@@ -485,10 +594,12 @@ function LogItem({ g, ctx, mine }) {
   let head = LOG_LABEL[g.type] || '기록'
   let detail = ''
   if (g.type === 'call') { head = `통화 · ${CALL_RESULT[g.result]?.n || ''}`; if (g.nextCall) detail = `다음 통화 ${fmtWhen(g.nextCall)}` }
-  if (g.type === 'book') detail = [`${fmtWhen(g.apptAt)}`, g.place, g.salesId && `영업 ${ctx.nameOf(g.salesId)}`].filter(Boolean).join(' · ')
+  if (g.type === 'book') detail = [`${fmtWhen(g.apptAt)}`, g.place, g.salesId && `미팅 담당 ${ctx.nameOf(g.salesId)}`].filter(Boolean).join(' · ')
+  if (g.type === 'manage') { detail = g.nextManage ? `다음 관리 ${fmtWhen(g.nextManage)}` : '' }
+  if (g.type === 'check') head = `✓ ${({ call: '연락', meet: '방문', manage: '관리' })[g.task] || ''} 완료`
   if (g.type === 'meet') { head = `${g.count || ''}번째 미팅 결과`; detail = g.nextLabel ? `다음: ${g.nextLabel}${g.apptAt ? ` (${fmtWhen(g.apptAt)})` : ''}` : '' }
   if (g.type === 'contract') { head = `계약 · ${CONTRACT[g.status]?.n || ''}`; detail = [g.amount ? `${won(g.amount)}원` : '', g.date].filter(Boolean).join(' · ') }
-  if (g.type === 'assign') detail = `영업 ${ctx.nameOf(g.salesId)}`
+  if (g.type === 'assign') detail = (g.changes || []).map((c) => `${c.n} ${c.id ? ctx.nameOf(c.id) : '미정'}`).join(' · ')
   if (g.type === 'stage') detail = `${STAGE[g.stage]?.n || ''}(으)로`
   const isNote = g.type === 'note'
   return (
@@ -496,7 +607,7 @@ function LogItem({ g, ctx, mine }) {
       <div className="log-h"><b>{ctx.nameOf(g.by)}</b>{role && <span className={`role role-${role}`}>{ROLES[role]?.short}</span>}<span className="muted">{fmtAgo(g.at)}</span></div>
       {!isNote && <div className="log-type">{head}</div>}
       {detail && <div className="log-d">{detail}</div>}
-      {g.text && <div className="log-t">{g.text}</div>}
+      {g.text && g.type !== 'check' && <div className="log-t">{g.text}</div>}
     </div>
   )
 }
@@ -523,11 +634,15 @@ function useSave(ctx, onClose) {
 const Chips = ({ items, value, onChange }) => (
   <div className="chips">{items.map((o) => <button type="button" key={o.k} aria-pressed={value === o.k} onClick={() => onChange(o.k)}>{o.n}</button>)}</div>
 )
-function SalesPick({ ctx, value, onChange }) {
+// 담당자 고르기: 그 역할 팀원을 먼저, 나머지 팀원도 고를 수 있게
+function PersonPick({ ctx, role, value, onChange, id }) {
+  const first = ctx.people.filter((m) => m.role === role)
+  const rest = ctx.people.filter((m) => m.role !== role)
   return (
-    <select id="salesPick" className="inp" value={value || ''} onChange={(e) => onChange(e.target.value)}>
-      <option value="">영업사원 고르기</option>
-      {ctx.salesList.map((m) => <option key={m.id} value={m.id}>{m.name} ({ROLES[m.role].short})</option>)}
+    <select id={id} className="inp" value={value || ''} onChange={(e) => onChange(e.target.value)}>
+      <option value="">미정</option>
+      {first.map((m) => <option key={m.id} value={m.id}>{m.name} ({ROLES[m.role].short})</option>)}
+      {rest.length > 0 && <optgroup label="다른 팀원">{rest.map((m) => <option key={m.id} value={m.id}>{m.name} ({ROLES[m.role]?.short})</option>)}</optgroup>}
     </select>
   )
 }
@@ -549,7 +664,7 @@ function CallSheet({ l, ctx, onClose }) {
       <div className="field"><span>통화 결과</span><Chips items={CALL_RESULTS} value={result} onChange={setResult} /></div>
       {needNext && <label className="field"><span>다시 걸 때</span><input type="datetime-local" className="inp" value={next} min={nowLocal()} onChange={(e) => setNext(e.target.value)} /></label>}
       {result === 'reject' && <p className="hint">'관심 없음'을 저장하면 이 고객은 무산 단계로 옮겨져요.</p>}
-      <label className="field"><span>통화 내용</span><textarea className="inp" rows={3} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="예: 원장님이 회원 음료 메뉴에 관심. 가격은 미팅 때 설명 원함" /></label>
+      <label className="field"><span>통화 내용</span><textarea className="inp" rows={3} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} /></label>
       {err && <p className="err">{err}</p>}
     </Sheet>
   )
@@ -564,16 +679,16 @@ function BookSheet({ l, ctx, onClose }) {
   return (
     <Sheet title="미팅 예약" onClose={onClose} busy={busy} onSubmit={() => {
       if (!at) return setErr('미팅 날짜·시간을 정해 주세요.')
-      if (!sales) return setErr('미팅에 갈 영업사원을 골라 주세요.')
+      if (!sales) return setErr('대면 미팅 담당을 골라 주세요.')
       const selfBooked = sales === ctx.user.id
       save(() => act(ctx.user, l, { type: 'book', apptAt: at, place: place.trim(), salesId: sales, text: text.trim() },
         { appt: { at, place: place.trim() }, apptAck: selfBooked, salesId: sales, nextCall: null, stage: ['new', 'called', 'met', 'hold'].includes(l.stage) ? 'booked' : l.stage }), '미팅을 예약했어요')
     }}>
       <label className="field"><span>미팅 일시</span><input type="datetime-local" className="inp" value={at} onChange={(e) => setAt(e.target.value)} /></label>
-      <label className="field"><span>장소</span><input className="inp" value={place} maxLength={60} onChange={(e) => setPlace(e.target.value)} placeholder="예: 매장 방문, 화상" /></label>
-      <label className="field"><span>담당 영업사원</span><SalesPick ctx={ctx} value={sales} onChange={setSales} /></label>
-      <label className="field"><span>영업사원에게 전할 말</span><textarea className="inp" rows={3} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="예: 원장님이 샘플 먼저 맛보고 싶어 함. 체험용 2병 챙겨 주세요" /></label>
-      <p className="hint">저장하면 영업사원 '할 일'에 확인할 예약으로 올라갑니다.</p>
+      <label className="field"><span>장소</span><input className="inp" value={place} maxLength={60} onChange={(e) => setPlace(e.target.value)} /></label>
+      <label className="field"><span>대면 미팅 담당</span><PersonPick id="pickSales" ctx={ctx} role="sales" value={sales} onChange={setSales} /></label>
+      <label className="field"><span>미팅 담당에게 전할 말</span><textarea className="inp" rows={3} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} /></label>
+      <p className="hint">저장하면 미팅 담당 대시보드에 '확인할 미팅 예약'과 방문 일정으로 올라갑니다.</p>
       {err && <p className="err">{err}</p>}
     </Sheet>
   )
@@ -596,7 +711,7 @@ function MeetSheet({ l, ctx, onClose }) {
       if (!l.salesId) patch.salesId = ctx.user.id
       save(() => act(ctx.user, l, { type: 'meet', count, next, nextLabel: label, apptAt: next === 'again' ? again : null, text: text.trim() }, patch, { meetings: 1 }), '미팅 결과를 남겼어요')
     }}>
-      <label className="field"><span>미팅 내용</span><textarea className="inp" rows={4} value={text} maxLength={800} onChange={(e) => setText(e.target.value)} placeholder="예: 원장님·실장님 두 분 미팅. 샵인샵 진열 위치와 첫 입고 수량 협의" /></label>
+      <label className="field"><span>미팅 내용</span><textarea className="inp" rows={4} value={text} maxLength={800} onChange={(e) => setText(e.target.value)} /></label>
       <div className="field"><span>다음 단계</span><Chips items={MEETING_NEXT} value={next} onChange={setNext} /></div>
       {next === 'again' && <label className="field"><span>다음 미팅 일시</span><input type="datetime-local" className="inp" value={again} onChange={(e) => setAgain(e.target.value)} /></label>}
       {err && <p className="err">{err}</p>}
@@ -609,27 +724,60 @@ function ContractSheet({ l, ctx, onClose }) {
   const [amount, setAmount] = useState(l.contract?.amount ? Number(l.contract.amount).toLocaleString('ko-KR') : '')
   const [date, setDate] = useState(l.contract?.date || '')
   const [text, setText] = useState('')
+  const [manager, setManager] = useState(l.managerId || '')
+  const [firstCare, setFirstCare] = useState(l.nextManage || '')
   const { busy, err, save } = useSave(ctx, onClose)
   return (
     <Sheet title="계약 상황" onClose={onClose} busy={busy} onSubmit={() => {
       const amt = Number(amount.replace(/[^\d]/g, '')) || 0
       const d = status === 'won' ? (date || todayStr()) : date
-      save(() => act(ctx.user, l, { type: 'contract', status, amount: amt, date: d, text: text.trim() },
-        { contract: { status, amount: amt, date: d }, stage: status, ...(status !== 'nego' ? { appt: null, nextCall: null } : {}) }), '계약 상황을 남겼어요')
+      const extra = status === 'won' ? { managerId: manager || null, nextManage: firstCare || null } : {}
+      save(() => act(ctx.user, l, { type: 'contract', status, amount: amt, date: d, text: text.trim(), ...(status === 'won' ? { managerId: manager || null, nextManage: firstCare || null } : {}) },
+        { contract: { status, amount: amt, date: d }, stage: status, ...extra, ...(status !== 'nego' ? { appt: null, nextCall: null } : {}) }), '계약 상황을 남겼어요')
     }}>
       <div className="field"><span>상태</span><Chips items={CONTRACT_STATUS} value={status} onChange={setStatus} /></div>
       <div className="row2">
         <label className="field"><span>금액 (선택)</span><input className="inp" inputMode="numeric" value={amount} placeholder="0" onChange={(e) => { const v = e.target.value.replace(/[^\d]/g, ''); setAmount(v ? Number(v).toLocaleString('ko-KR') : '') }} /></label>
         <label className="field"><span>계약일</span><input type="date" className="inp" value={date} onChange={(e) => setDate(e.target.value)} /></label>
       </div>
-      <label className="field"><span>내용</span><textarea className="inp" rows={3} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="예: 첫 입고 300병, 진열대 설치 다음 주. 계약서 서명 완료" /></label>
+      {status === 'won' && (
+        <div className="row2">
+          <label className="field"><span>관리 담당 (계약 후)</span><PersonPick id="pickManager" ctx={ctx} role="manager" value={manager} onChange={setManager} /></label>
+          <label className="field"><span>첫 관리 일정</span><input type="datetime-local" className="inp" value={firstCare} onChange={(e) => setFirstCare(e.target.value)} /></label>
+        </div>
+      )}
+      <label className="field"><span>내용</span><textarea className="inp" rows={3} value={text} maxLength={500} onChange={(e) => setText(e.target.value)} /></label>
+      {err && <p className="err">{err}</p>}
+    </Sheet>
+  )
+}
+
+function ManageSheet({ l, ctx, onClose }) {
+  const [text, setText] = useState('')
+  const [next, setNext] = useState('')
+  const [manager, setManager] = useState(l.managerId || (ctx.me.role === 'manager' ? ctx.user.id : ''))
+  const { busy, err, setErr, save } = useSave(ctx, onClose)
+  return (
+    <Sheet title="관리 기록" onClose={onClose} busy={busy} onSubmit={() => {
+      if (!text.trim()) return setErr('관리한 내용을 적어 주세요.')
+      const patch = { nextManage: next || null, managerId: manager || null }
+      save(() => act(ctx.user, l, { type: 'manage', nextManage: next || null, text: text.trim() }, patch, { manages: 1 }), '관리 기록을 남겼어요')
+    }}>
+      <label className="field"><span>관리 내용</span><textarea className="inp" rows={4} value={text} maxLength={800} onChange={(e) => setText(e.target.value)} /></label>
+      <div className="row2">
+        <label className="field"><span>다음 관리 일정</span><input type="datetime-local" className="inp" value={next} onChange={(e) => setNext(e.target.value)} /></label>
+        <label className="field"><span>관리 담당</span><PersonPick id="pickManager2" ctx={ctx} role="manager" value={manager} onChange={setManager} /></label>
+      </div>
       {err && <p className="err">{err}</p>}
     </Sheet>
   )
 }
 
 function LeadForm({ ctx, lead, onClose, onSaved, onDeleted }) {
-  const [f, setF] = useState({ name: lead?.name || '', person: lead?.person || '', phone: lead?.phone || '', region: lead?.region || '', category: lead?.category || '', memo: '', salesId: lead?.salesId || '' })
+  const [f, setF] = useState({
+    name: lead?.name || '', person: lead?.person || '', phone: lead?.phone || '', region: lead?.region || '', category: lead?.category || '', memo: '',
+    tmId: lead ? lead.tmId || '' : (['tm', 'admin'].includes(ctx.me.role) ? ctx.user.id : ''), salesId: lead?.salesId || '', managerId: lead?.managerId || '',
+  })
   const [sure, setSure] = useState(false)
   const { busy, err, setErr } = useSave(ctx, () => {})
   const [saving, setSaving] = useState(false)
@@ -640,27 +788,35 @@ function LeadForm({ ctx, lead, onClose, onSaved, onDeleted }) {
     setSaving(true); setErr('')
     try {
       const data = { name: f.name.trim(), person: f.person.trim(), phone: f.phone.trim(), region: f.region.trim(), category: f.category }
+      const duty = Object.fromEntries(DUTIES.map((d) => [d.k, f[d.k] || null]))
       if (lead) {
-        if ((f.salesId || null) !== (lead.salesId || null)) await act(ctx.user, lead, { type: 'assign', salesId: f.salesId || null, text: '' }, { ...data, salesId: f.salesId || null, apptAck: false })
+        const changes = DUTIES.filter((d) => (f[d.k] || null) !== (lead[d.k] || null)).map((d) => ({ n: d.n, id: f[d.k] || null }))
+        if (changes.length) await act(ctx.user, lead, { type: 'assign', changes, text: '' }, { ...data, ...duty, ...(changes.some((c) => c.n === '대면 미팅') ? { apptAck: false } : {}) })
         else await editLead(lead, data)
         onSaved()
       } else {
-        const id = await createLead(ctx.user, { ...data, memo: f.memo.trim(), salesId: f.salesId || null })
+        const id = await createLead(ctx.user, { ...data, ...duty, memo: f.memo.trim() })
         onSaved(id)
       }
     } catch { setErr('저장하지 못했어요. 다시 눌러 주세요.') } finally { setSaving(false) }
   }
   return (
     <Sheet title={lead ? '고객 정보 수정' : '고객 등록'} onClose={onClose} busy={busy || saving} onSubmit={submit} submitLabel={lead ? '저장' : '등록'}>
-      <label className="field"><span>매장 이름</span><input className="inp" value={f.name} maxLength={40} onChange={set('name')} placeholder="예: 망원 바른헬스" /></label>
+      <label className="field"><span>매장 이름</span><input className="inp" value={f.name} maxLength={40} onChange={set('name')} /></label>
       <div className="row2">
-        <label className="field"><span>원장·담당자</span><input className="inp" value={f.person} maxLength={20} onChange={set('person')} placeholder="예: 김원장" /></label>
-        <label className="field"><span>전화번호</span><input className="inp" type="tel" inputMode="tel" value={f.phone} maxLength={20} onChange={set('phone')} placeholder="010-0000-0000" /></label>
+        <label className="field"><span>원장·담당자</span><input className="inp" value={f.person} maxLength={20} onChange={set('person')} /></label>
+        <label className="field"><span>전화번호</span><input className="inp" type="tel" inputMode="tel" value={f.phone} maxLength={20} onChange={set('phone')} /></label>
       </div>
-      <label className="field"><span>지역</span><input className="inp" value={f.region} maxLength={40} onChange={set('region')} placeholder="예: 서울 마포구 망원동" /></label>
+      <label className="field"><span>지역</span><input className="inp" value={f.region} maxLength={40} onChange={set('region')} /></label>
       <div className="field"><span>업종</span><Chips items={CATEGORIES.map((c) => ({ k: c, n: c }))} value={f.category} onChange={(v) => setF((s) => ({ ...s, category: v }))} /></div>
-      <label className="field"><span>담당 영업사원 (나중에 정해도 돼요)</span><SalesPick ctx={ctx} value={f.salesId} onChange={(v) => setF((s) => ({ ...s, salesId: v }))} /></label>
-      {!lead && <label className="field"><span>메모 (어떻게 찾은 매장인지 등)</span><textarea className="inp" rows={2} value={f.memo} maxLength={300} onChange={set('memo')} placeholder="예: 네이버 지도 검색, 회원 200명 규모" /></label>}
+      <div className="field"><span>역할별 담당 (나중에 정해도 돼요)</span>
+        <div className="duty-picks">
+          {DUTIES.map((d) => (
+            <label key={d.k}><span>{d.n}</span><PersonPick id={`duty-${d.k}`} ctx={ctx} role={d.role} value={f[d.k]} onChange={(v) => setF((s) => ({ ...s, [d.k]: v }))} /></label>
+          ))}
+        </div>
+      </div>
+      {!lead && <label className="field"><span>메모 (어떻게 찾은 매장인지 등)</span><textarea className="inp" rows={2} value={f.memo} maxLength={300} onChange={set('memo')} /></label>}
       {err && <p className="err">{err}</p>}
       {lead && ctx.isAdmin && (
         <button type="button" className="link danger" onClick={async () => { if (!sure) return setSure(true); try { await deleteLead(lead); onDeleted() } catch { setErr('삭제하지 못했어요.') } }}>

@@ -2,10 +2,21 @@
 
 export const ROLES = {
   admin: { n: '대표', short: '대표' },
-  tm: { n: 'TM (전화 상담)', short: 'TM' },
-  sales: { n: '영업사원', short: '영업' },
-  pending: { n: '승인 대기', short: '대기' },
+  tm: { n: 'TM · 미팅 전 담당', short: 'TM' },
+  sales: { n: '대면 미팅 담당', short: '미팅' },
+  manager: { n: '관리 담당', short: '관리' },
+  pending: { n: '역할 대기', short: '대기' },
 }
+export const ROLE_PICK = ['tm', 'sales', 'manager', 'admin']
+
+// 고객마다 역할별 담당자 3명: TM(미팅 전) → 대면 미팅 → 계약 후 관리
+export const DUTIES = [
+  { k: 'tmId', role: 'tm', n: 'TM · 미팅 전' },
+  { k: 'salesId', role: 'sales', n: '대면 미팅' },
+  { k: 'managerId', role: 'manager', n: '관리' },
+]
+// 지금 단계에서 일을 맡은 담당 (stage → 담당 칸)
+export const OWNER_OF_STAGE = { new: 'tmId', called: 'tmId', booked: 'salesId', met: 'salesId', nego: 'salesId', won: 'managerId' }
 
 // 고객 단계 (영업 흐름 순서)
 export const STAGES = [
@@ -14,7 +25,7 @@ export const STAGES = [
   { k: 'booked', n: '미팅 예약', tone: 'violet' },
   { k: 'met', n: '미팅 진행', tone: 'teal' },
   { k: 'nego', n: '계약 협의', tone: 'amber' },
-  { k: 'won', n: '계약 완료', tone: 'green' },
+  { k: 'won', n: '계약·관리', tone: 'green' },
   { k: 'hold', n: '보류', tone: 'gray' },
   { k: 'lost', n: '무산', tone: 'red' },
 ]
@@ -47,7 +58,7 @@ export const CONTRACT_STATUS = [
 export const CONTRACT = Object.fromEntries(CONTRACT_STATUS.map((s) => [s.k, s]))
 
 export const LOG_LABEL = {
-  create: '고객 등록', call: '통화', book: '미팅 예약', ack: '예약 확인', meet: '미팅 결과', contract: '계약 상황', note: '메모', assign: '담당 변경', stage: '단계 변경',
+  create: '고객 등록', call: '통화', manage: '관리 기록', check: '완료 체크', book: '미팅 예약', ack: '예약 확인', meet: '미팅 결과', contract: '계약 상황', note: '메모', assign: '담당 변경', stage: '단계 변경',
 }
 
 // 날짜·시간
@@ -82,3 +93,12 @@ export const fmtPhone = (p) => {
   if (d.length === 9 && d.startsWith('02')) return `02-${d.slice(2, 5)}-${d.slice(5)}`
   return p || ''
 }
+
+// 이번 주(월~일)
+export function weekDays() {
+  const t = new Date(`${todayStr()}T00:00`)
+  const mon = new Date(t); mon.setDate(t.getDate() - ((t.getDay() + 6) % 7))
+  return Array.from({ length: 7 }, (_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` })
+}
+export const dayLabel = (d) => { const dt = new Date(`${d}T00:00`); return `${Number(d.slice(5, 7))}.${Number(d.slice(8, 10))} (${WD[dt.getDay()]})` }
+export const checkKey = (type, at) => `${type}_${String(at).replace(/[^0-9A-Za-z]/g, '')}`
